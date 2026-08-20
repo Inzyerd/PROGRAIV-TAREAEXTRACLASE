@@ -1,0 +1,9 @@
+[
+  {
+    "id": "1",
+    "name": "Preparar entrega del extraclase de MCP",
+    "description": "Terminar la parte teórica y práctica antes de la fecha límite",
+    "priority": "alta",
+    "completed": false
+  }
+]
