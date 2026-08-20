@@ -49,7 +49,7 @@ configuración de Claude Desktop del sistema operativo correspondiente):
   "mcpServers": {
     "todo-server": {
       "command": "node",
-      "args": ["/RUTA/ABSOLUTA/mcp-todo-server/dist/server.js"]
+      "args": ["> mcp-todo-server@1.0.0 build"]
     }
   }
 }

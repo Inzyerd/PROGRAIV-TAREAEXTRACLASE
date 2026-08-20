@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "todo-server": {
+      "command": "node",
+      "args": ["> mcp-todo-server@1.0.0 build"]
+    }
+  }
+}
+

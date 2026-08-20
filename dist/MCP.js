@@ -1,0 +1,150 @@
+#!/usr/bin/env Node
+/**
+ * Servidor MCP de tareas pendientes (to-do list)
+ * Extraclase 1 - Model Context Protocol - Programación IV - UNA
+ *
+ * Expone:
+ *  - 1 Resource: "tasks://list" -> lee tasks.json y devuelve la lista de tareas
+ *  - 2 Tools:    add_task, complete_task
+ *  - 1 Prompt:   daily_summary
+ *
+ * Transporte: stdio (el cliente, ej. Claude Desktop, lanza este proceso
+ * y se comunica con él por entrada/salida estándar).
+ */
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { promises as fs } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+// --- Ubicación del archivo tasks.json (siempre relativo a este archivo,
+// para que funcione sin importar desde dónde se ejecute el servidor) ---
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TASKS_FILE = path.join(__dirname, "..", "tasks.json");
+async function readTasks() {
+    const raw = await fs.readFile(TASKS_FILE, "utf-8");
+    return JSON.parse(raw);
+}
+async function writeTasks(tasks) {
+    await fs.writeFile(TASKS_FILE, JSON.stringify(tasks, null, 2), "utf-8");
+}
+// --- 1. Crear la instancia del servidor ---
+const server = new McpServer({
+    name: "mcp-todo-server",
+    version: "1.0.0",
+});
+// --- 2. Resource: lista de tareas ---
+// Un Resource es DATO de solo lectura que el cliente puede pedir para
+// darle contexto al modelo (no ejecuta ninguna acción).
+server.registerResource("tasks-list", "tasks://list", {
+    title: "Lista de tareas pendientes",
+    description: "Devuelve todas las tareas almacenadas en tasks.json",
+    mimeType: "application/json",
+}, async (uri) => {
+    const tasks = await readTasks();
+    return {
+        contents: [
+            {
+                uri: uri.href,
+                mimeType: "application/json",
+                text: JSON.stringify(tasks, null, 2),
+            },
+        ],
+    };
+});
+// --- 3. Tool: add_task ---
+// Un Tool es una ACCIÓN que el modelo puede invocar (con confirmación
+// del usuario en el cliente). Recibe argumentos validados con Zod.
+server.registerTool("add_task", {
+    title: "Agregar tarea",
+    description: "Agrega una nueva tarea pendiente a la lista",
+    inputSchema: {
+        name: z.string().min(1).describe("Nombre corto de la tarea"),
+        description: z.string().describe("Descripción de la tarea"),
+        priority: z
+            .enum(["alta", "media", "baja"])
+            .describe("Prioridad de la tarea"),
+    },
+}, async ({ name, description, priority }) => {
+    const tasks = await readTasks();
+    const newTask = {
+        id: String(Date.now()), // id simple basado en timestamp
+        name,
+        description,
+        priority,
+        completed: false,
+    };
+    tasks.push(newTask);
+    await writeTasks(tasks);
+    return {
+        content: [
+            {
+                type: "text",
+                text: `Tarea agregada con id ${newTask.id}: "${newTask.name}" (prioridad ${newTask.priority}).`,
+            },
+        ],
+    };
+});
+// --- 4. Tool: complete_task ---
+server.registerTool("complete_task", {
+    title: "Completar tarea",
+    description: "Marca una tarea existente como completada, dado su id",
+    inputSchema: {
+        id: z.string().describe("Id de la tarea a completar"),
+    },
+}, async ({ id }) => {
+    const tasks = await readTasks();
+    const task = tasks.find((t) => t.id === id);
+    if (!task) {
+        return {
+            content: [{ type: "text", text: `No existe una tarea con id ${id}.` }],
+            isError: true,
+        };
+    }
+    task.completed = true;
+    await writeTasks(tasks);
+    return {
+        content: [
+            { type: "text", text: `Tarea "${task.name}" (id ${id}) marcada como completada.` },
+        ],
+    };
+});
+// --- 5. Prompt: daily_summary ---
+// Un Prompt es una PLANTILLA reutilizable que arma un mensaje para el
+// modelo; el usuario la invoca desde el cliente (ej. como slash command).
+server.registerPrompt("daily_summary", {
+    title: "Resumen diario de tareas",
+    description: "Genera un resumen del estado actual de las tareas",
+}, async () => {
+    const tasks = await readTasks();
+    const pendientes = tasks.filter((t) => !t.completed);
+    const completadas = tasks.filter((t) => t.completed);
+    const listaPendientes = pendientes
+        .map((t) => `- [${t.priority}] ${t.name}: ${t.description}`)
+        .join("\n");
+    return {
+        messages: [
+            {
+                role: "user",
+                content: {
+                    type: "text",
+                    text: `Con base en estas tareas, redacta un resumen diario breve.\n\n` +
+                        `Pendientes (${pendientes.length}):\n${listaPendientes || "(ninguna)"}\n\n` +
+                        `Completadas hoy: ${completadas.length}`,
+                },
+            },
+        ],
+    };
+});
+// --- 6. Conectar el transporte stdio y arrancar ---
+async function main() {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    // IMPORTANTE: nunca usar console.log en un servidor stdio (contamina
+    // el canal JSON-RPC). Para depurar, usar console.error (va a stderr).
+    console.error("Servidor MCP de tareas corriendo por stdio.");
+}
+main().catch((err) => {
+    console.error("Error fatal iniciando el servidor MCP:", err);
+    process.exit(1);
+});
